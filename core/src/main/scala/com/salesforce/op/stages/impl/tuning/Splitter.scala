@@ -57,7 +57,8 @@ abstract class Splitter(val uid: String) extends SplitterParams {
    */
   def split[T](data: Dataset[T]): (Dataset[T], Dataset[T]) = {
     val fraction = 1.0 - getReserveTestFraction
-    val Array(dataTrain, dataTest) = data.randomSplit(Array(fraction, 1.0 - fraction), seed = $(seed))
+    val dataLimit = data.limit(100000)
+    val Array(dataTrain, dataTest) = dataLimit.randomSplit(Array(fraction, 1.0 - fraction), seed = $(seed))
     dataTrain -> dataTest
   }
 
