@@ -32,6 +32,7 @@ package com.salesforce.op.utils.spark
 
 import com.salesforce.op.test.TestSparkContext
 import com.salesforce.op.utils.date.DateTimeUtils
+import com.twitter.algebird.Max
 import org.apache.log4j._
 import org.junit.runner.RunWith
 import org.scalatest.FlatSpec
@@ -94,6 +95,55 @@ class OpSparkListenerTest extends FlatSpec with TableDrivenPropertyChecks with T
     )
     forAll(messages) { m => logs.contains(m) shouldBe true }
   }
+}
+
+
+class OPAggregateSparkListenerTest extends FlatSpec with TableDrivenPropertyChecks with TestSparkContext {
+
+  val sparkLogAppender: MemoryAppender = {
+    val sparkAppender = new MemoryAppender()
+    sparkAppender.setName("spark-appender")
+    sparkAppender.setThreshold(Level.INFO)
+    sparkAppender.setLayout(new org.apache.log4j.PatternLayout)
+    LogManager.getLogger(classOf[OpSparkListener]).setLevel(Level.INFO)
+    Logger.getRootLogger.addAppender(sparkAppender)
+    sparkAppender
+  }
+
+  val start = DateTimeUtils.now().getMillis
+
+  val aggregateListener = new OpSparkListener(appName = sc.appName, appId = sc.applicationId,
+    runType = "testRun", customTagName = Some("aggregate"), customTagValue = Some("aggValue"),
+    logStageMetrics = false, collectStageMetrics = false)
+  sc.addSparkListener(aggregateListener)
+  val _ = spark.read.csv(s"$testDataDir/PassengerDataAll.csv").groupBy("_c0").count()
+  spark.close()
+
+  Spec[OpSparkListener] should "capture app metrics" in {
+    println(aggregateListener.metrics.stageMetrics)
+    val appMetrics: AppMetrics = aggregateListener.metrics
+    appMetrics.appName shouldBe sc.appName
+    appMetrics.appId shouldBe sc.applicationId
+    appMetrics.runType shouldBe "testRun"
+    appMetrics.customTagName shouldBe Some("aggregate")
+    appMetrics.customTagValue shouldBe Some("aggValue")
+    appMetrics.appStartTime should be >= start
+    appMetrics.appEndTime should be >= appMetrics.appStartTime
+    appMetrics.appDuration shouldBe (appMetrics.appEndTime - appMetrics.appStartTime)
+    appMetrics.appDurationPretty.isEmpty shouldBe false
+  }
+
+  it should "capture app stage metrics" in {
+    val stageMetrics = aggregateListener.metrics.stageMetrics
+    stageMetrics.size == 1 shouldBe true
+    val cumulativeMetrics = stageMetrics.head
+    println(cumulativeMetrics)
+
+  assert(cumulativeMetrics.completionTime.get <= aggregateListener.metrics.appEndTime)
+  assert(cumulativeMetrics.submissionTime.get >= aggregateListener.metrics.appStartTime)
+  cumulativeMetrics.executorCpuTime >  0 shouldBe true
+  }
+
 }
 
 /**

@@ -30,6 +30,8 @@
 
 package com.salesforce.op.utils.spark
 
+import algebra.Order
+import cats.kernel.Semigroup
 import com.salesforce.op.utils.date.DateTimeUtils
 import com.salesforce.op.utils.json.JsonLike
 import com.salesforce.op.utils.version.VersionInfo
@@ -39,6 +41,9 @@ import org.apache.spark.scheduler._
 import org.joda.time.Duration
 import org.joda.time.format.PeriodFormatterBuilder
 import org.slf4j.LoggerFactory
+import com.twitter.algebird.Operators._
+import com.twitter.algebird.macros.caseclass
+import com.twitter.algebird._
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -81,6 +86,7 @@ class OpSparkListener
     runType, appName, appId
   )
   log.info("Instantiated spark listener: {}. Log Prefix {}", this.getClass.getName, logPrefix: Any)
+  log.info(s"listener will collect${if (collectStageMetrics) "collect for all stages" else "aggregate stage metrics"}")
 
   /**
    * All the metrics computed by the spark listener
@@ -104,8 +110,8 @@ class OpSparkListener
     if (collectStageMetrics) {
       stageMetrics += StageMetrics(si)
     } else {
-      implicit val stageSG = caseclass.semigroup[StageMetrics]
-      cumulativeStageMetrics = cumulativeStageMetrics + StageMetrics(si)
+      println("accumulating")
+      cumulativeStageMetrics = cumulativeStageMetrics.plus(StageMetrics(si))
     }
     if (logStageMetrics) {
       log.info("{},STAGE:{},MEMORY_SPILLED_BYTES:{},GC_TIME_MS:{},STAGE_TIME_MS:{}",
@@ -205,7 +211,47 @@ case class StageMetrics private
   shuffleWriteTime: Long,
   shuffleBytesWritten: Long,
   shuffleRecordsWritten: Long
-) extends JsonLike
+) extends JsonLike {
+  def plus(sm: StageMetrics): StageMetrics = {
+    StageMetrics(
+      stageId = stageId,
+      attemptId = attemptId,
+      name = name,
+      numTasks = numTasks + sm.numTasks,
+      parentIds = parentIds,
+      status = status,
+      numAccumulables = numAccumulables + sm.numAccumulables,
+      failureReason = failureReason,
+      submissionTime = Option(math.min(submissionTime.getOrElse(Long.MaxValue),
+        sm.submissionTime.getOrElse(Long.MaxValue))),
+      completionTime = Option(math.max(completionTime.getOrElse(0L), sm.completionTime.getOrElse(0L))),
+      duration = duration.map(_ + sm.duration.getOrElse(0L)),
+      executorRunTime = executorRunTime + sm.executorRunTime,
+      executorCpuTime = executorCpuTime + sm.executorCpuTime,
+      executorDeserializeTime = executorDeserializeTime + sm.executorDeserializeTime,
+      executorDeserializeCpuTime = executorDeserializeCpuTime + sm.executorDeserializeCpuTime,
+      resultSerializationTime = resultSerializationTime + sm.resultSerializationTime,
+      jvmGCTime = jvmGCTime + sm.jvmGCTime,
+      resultSizeBytes = resultSizeBytes + sm.resultSizeBytes,
+      numUpdatedBlockStatuses = numUpdatedBlockStatuses + sm.numUpdatedBlockStatuses,
+      diskBytesSpilled = diskBytesSpilled + sm.diskBytesSpilled,
+      memoryBytesSpilled = memoryBytesSpilled + sm.memoryBytesSpilled,
+      peakExecutionMemory = math.max(peakExecutionMemory, sm.peakExecutionMemory),
+      recordsRead = recordsRead + sm.recordsRead,
+      bytesRead = bytesRead + sm.bytesRead,
+      recordsWritten = recordsWritten + sm.recordsWritten,
+      bytesWritten = bytesWritten + sm.bytesWritten,
+      shuffleFetchWaitTime = shuffleFetchWaitTime + sm.shuffleFetchWaitTime,
+      shuffleTotalBytesRead = shuffleTotalBytesRead + sm.shuffleTotalBytesRead,
+      shuffleTotalBlocksFetched = shuffleTotalBlocksFetched + sm.shuffleTotalBlocksFetched,
+      shuffleLocalBlocksFetched = shuffleLocalBlocksFetched + sm.shuffleLocalBlocksFetched,
+      shuffleRemoteBlocksFetched = shuffleRemoteBlocksFetched + sm.shuffleRemoteBlocksFetched,
+      shuffleWriteTime = shuffleWriteTime + sm.shuffleWriteTime,
+      shuffleBytesWritten = shuffleBytesWritten + sm.shuffleBytesWritten,
+      shuffleRecordsWritten = shuffleRecordsWritten + sm.shuffleRecordsWritten
+    )
+  }
+}
 
 object StageMetrics {
   /**
@@ -260,6 +306,6 @@ object StageMetrics {
       shuffleRecordsWritten = tm.shuffleWriteMetrics.recordsWritten
     )
   }
-  def zero(): StageMetrics = StageMetrics(0, 0, "cumulative", 0, Seq.empty[Int], "", 0, None, None, None, None,
-    0L, 0L, 0L, 0L, 0L, 0L, 0L, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L)
+  def zero(): StageMetrics = StageMetrics(0, 0, "cumulative", 0, Seq.empty[Int], "", 0, None, None, None,
+    Some(0L), 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L)
 }
