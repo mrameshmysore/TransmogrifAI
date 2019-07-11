@@ -33,7 +33,7 @@ package com.salesforce.op
 import com.salesforce.op.evaluators._
 import com.salesforce.op.features._
 import com.salesforce.op.features.types._
-import com.salesforce.op.filters.FeatureDistribution
+import com.salesforce.op.filters._
 import com.salesforce.op.stages._
 import com.salesforce.op.stages.impl.feature.TransmogrifierDefaults
 import com.salesforce.op.stages.impl.preparators._
@@ -88,7 +88,6 @@ case class ModelInsights
     implicit val formats = ModelInsights.SerializationFormats
     if (pretty) writePretty(this) else write(this)
   }
-
 
   /**
    * High level model summary in a compact print friendly format containing:
@@ -323,21 +322,25 @@ case class Continuous(min: Double, max: Double, mean: Double, variance: Double) 
  */
 case class Discrete(domain: Seq[String], prob: Seq[Double]) extends LabelInfo
 
-
 /**
  * Summary of feature insights for all features derived from a given input (raw) feature
  *
- * @param featureName     name of raw feature insights are about
- * @param featureType     type of raw feature insights are about
- * @param derivedFeatures sequence containing insights for each feature derived from the raw feature
- * @param distributions   distribution information for the raw feature (if calculated in RawFeatureFilter)
+ * @param featureName      name of raw feature insights are about
+ * @param featureType      type of raw feature insights are about
+ * @param derivedFeatures  sequence containing insights for each feature derived from the raw feature
+ * @param metrics          sequence containing metrics computed in RawFeatureFilter
+ * @param distributions    distribution information for the raw feature (if calculated in RawFeatureFilter)
+ * @param exclusionReasons exclusion reasons for the raw feature (if calculated in RawFeatureFilter)
+ *
  */
 case class FeatureInsights
 (
   featureName: String,
   featureType: String,
   derivedFeatures: Seq[Insights],
-  distributions: Seq[FeatureDistribution] = Seq.empty
+  metrics: Seq[RawFeatureFilterMetrics] = Seq.empty,
+  distributions: Seq[FeatureDistribution] = Seq.empty,
+  exclusionReasons: Seq[ExclusionReasons] = Seq.empty
 )
 
 /**
@@ -422,10 +425,13 @@ case object ModelInsights {
   /**
    * Function to extract the model summary info from the stages used to create the selected model output feature
    *
-   * @param stages         stages used to make the feature
-   * @param rawFeatures    raw features in the workflow
-   * @param trainingParams parameters used to create the workflow model
-   * @return model insight summary
+   * @param stages                  stages used to make the feature
+   * @param rawFeatures             raw features in the workflow
+   * @param trainingParams          parameters used to create the workflow model
+   * @param blacklistedFeatures     blacklisted features from use in DAG
+   * @param blacklistedMapKeys      blacklisted map keys from use in DAG
+   * @param rawFeatureFilterResults results of raw feature filter
+   * @return
    */
   private[op] def extractFromStages(
     stages: Array[OPStage],
@@ -433,7 +439,7 @@ case object ModelInsights {
     trainingParams: OpParams,
     blacklistedFeatures: Array[features.OPFeature],
     blacklistedMapKeys: Map[String, Set[String]],
-    rawFeatureDistributions: Array[FeatureDistribution]
+    rawFeatureFilterResults: RawFeatureFilterResults
   ): ModelInsights = {
     val sanityCheckers = stages.collect { case s: SanityCheckerModel => s }
     val sanityChecker = sanityCheckers.lastOption
@@ -477,13 +483,15 @@ case object ModelInsights {
       s"Found ${vectorInput.map(_.name + " as feature vector").getOrElse("no feature vector")}" +
         s" to fill in model insights"
     )
+
     ModelInsights(
       label = getLabelSummary(label, checkerSummary),
       features = getFeatureInsights(vectorInput, checkerSummary, model, rawFeatures,
-        blacklistedFeatures, blacklistedMapKeys, rawFeatureDistributions),
+        blacklistedFeatures, blacklistedMapKeys, rawFeatureFilterResults),
       selectedModelInfo = getModelInfo(model),
       trainingParams = trainingParams,
-      stageInfo = getStageInfo(stages)
+      stageInfo = RawFeatureFilterConfig.toStageInfo(rawFeatureFilterResults.rawFeatureFilterConfig)
+        ++ getStageInfo(stages)
     )
   }
 
@@ -529,7 +537,7 @@ case object ModelInsights {
     rawFeatures: Array[features.OPFeature],
     blacklistedFeatures: Array[features.OPFeature],
     blacklistedMapKeys: Map[String, Set[String]],
-    rawFeatureDistributions: Array[FeatureDistribution]
+    rawFeatureFilterResults: RawFeatureFilterResults = RawFeatureFilterResults()
   ): Seq[FeatureInsights] = {
     val featureInsights = (vectorInfo, summary) match {
       case (Some(v), Some(s)) =>
@@ -617,9 +625,11 @@ case object ModelInsights {
           val ftype = allFeatures.find(_.name == fname)
             .map(_.typeName)
             .getOrElse("")
-          val distributions = rawFeatureDistributions.filter(_.name == fname)
+          val metrics = rawFeatureFilterResults.rawFeatureFilterMetrics.filter(_.name == fname)
+          val distributions = rawFeatureFilterResults.rawFeatureDistributions.filter(_.name == fname)
+          val exclusionReasons = rawFeatureFilterResults.exclusionReasons.filter(_.name == fname)
           FeatureInsights(featureName = fname, featureType = ftype, derivedFeatures = seq.map(_._2),
-            distributions = distributions)
+            metrics = metrics, distributions = distributions, exclusionReasons = exclusionReasons)
       }.toSeq
   }
 

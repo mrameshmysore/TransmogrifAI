@@ -39,7 +39,7 @@ import org.scalatest.junit.JUnitRunner
 import com.salesforce.op.utils.spark.RichDataset._
 
 @RunWith(classOf[JUnitRunner])
-class OpStringIndexerTest extends FlatSpec with TestSparkContext{
+class OpStringIndexerTest extends FlatSpec with TestSparkContext {
 
   val txtData = Seq("a", "b", "c", "a", "a", "c").map(_.toText)
   val (ds, txtF) = TestFeatureBuilder(txtData)
@@ -68,7 +68,7 @@ class OpStringIndexerTest extends FlatSpec with TestSparkContext{
     indices shouldBe expected
   }
 
-  it should "correctly deinxed a numeric column" in {
+  it should "correctly deindex a numeric column" in {
     val indexedStage = new OpStringIndexer[Text]().setInput(txtF)
     val indexed = indexedStage.getOutput()
     val indices = indexedStage.fit(ds).transform(ds)

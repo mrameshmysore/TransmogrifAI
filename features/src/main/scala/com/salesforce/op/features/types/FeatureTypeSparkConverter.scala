@@ -168,6 +168,7 @@ case object FeatureTypeSparkConverter {
           case null => None
           case v: Float => Some(v.toDouble)
           case v: Double => Some(v)
+          case v: Number => Some(v.doubleValue())
           case v => throw new IllegalArgumentException(s"RealNN type mapping is not defined for ${v.getClass}")
         }
       case wt if wt <:< weakTypeOf[t.Real] => (value: Any) =>
@@ -175,6 +176,7 @@ case object FeatureTypeSparkConverter {
           case null => FeatureTypeDefaults.Real.value
           case v: Float => Some(v.toDouble)
           case v: Double => Some(v)
+          case v: Number => Some(v.doubleValue())
           case v => throw new IllegalArgumentException(s"Real type mapping is not defined for ${v.getClass}")
         }
       case wt if wt <:< weakTypeOf[t.Integral] => (value: Any) =>
@@ -192,11 +194,11 @@ case object FeatureTypeSparkConverter {
       // Maps
       case wt if wt <:< weakTypeOf[t.MultiPickListMap] => (value: Any) =>
         if (value == null) FeatureTypeDefaults.MultiPickListMap.value
-        else value.asInstanceOf[Map[String, MWrappedArray[String]]].map { case (k, v) => k -> v.toSet }
+        else value.asInstanceOf[Map[String, Seq[String]]].map { case (k, v) => k -> v.toSet }
 
       // Sets
       case wt if wt <:< weakTypeOf[t.MultiPickList] => (value: Any) =>
-        if (value == null) FeatureTypeDefaults.MultiPickList.value else value.asInstanceOf[MWrappedArray[String]].toSet
+        if (value == null) FeatureTypeDefaults.MultiPickList.value else value.asInstanceOf[Seq[String]].toSet
 
       // Everything else
       case _ => identity

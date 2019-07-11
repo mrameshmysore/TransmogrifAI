@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.5.3
+
+Bug fixes:
+- Threshold metrics calculation fix when unseen labels are present [#293](https://github.com/salesforce/TransmogrifAI/pull/293)
+- DataCutter-related fixes for multiclass [#263](https://github.com/salesforce/TransmogrifAI/pull/263)
+- Fixed onSetInput so is always called with new input [#280](https://github.com/salesforce/TransmogrifAI/pull/280)
+
+New features / updates:
+- Improved test SmartTextMapVectorizerTest [#296](https://github.com/salesforce/TransmogrifAI/pull/296)
+- Add check to raw feature filter for removing all features [#303](https://github.com/salesforce/TransmogrifAI/pull/303)
+- Spec-ifying ngram similarity tests [#299](https://github.com/salesforce/TransmogrifAI/pull/299)
+- Add random test feature generator to generate datasets with features of *all* types [#298](https://github.com/salesforce/TransmogrifAI/pull/298)
+- Spec-ifying NGramTest [#297](https://github.com/salesforce/TransmogrifAI/pull/297)
+- Added base spec for testing Spark wrapping transformers [#295](https://github.com/salesforce/TransmogrifAI/pull/295)
+- Add/upgrade string indexing tests [#294](https://github.com/salesforce/TransmogrifAI/pull/294)
+- Improved multi pick list map vectorizer test [#292](https://github.com/salesforce/TransmogrifAI/pull/292)
+- Improvements of Vectorizer tests [#291](https://github.com/salesforce/TransmogrifAI/pull/291)
+- Updated TextMapPivotVectorizerTest to use OpEstimatorSpec [#290](https://github.com/salesforce/TransmogrifAI/pull/290)
+- Update TextTokenizerTest to use OpTransformerSpec [#289](https://github.com/salesforce/TransmogrifAI/pull/289)
+- Add test for RealNNVectorizer [#288](https://github.com/salesforce/TransmogrifAI/pull/288)
+- Improved OPCollectionHashingVectorizerTest test [#286](https://github.com/salesforce/TransmogrifAI/pull/286)
+- Created new tests for OpCollection [#285](https://github.com/salesforce/TransmogrifAI/pull/286)
+- Update names of transformer tests and files to match class names [#284](https://github.com/salesforce/TransmogrifAI/pull/286)
+- Improved test by extending OpTransformerSpec [#283](https://github.com/salesforce/TransmogrifAI/pull/286)
+- Skip writing empty stages & skip loading stages without uid-s [#282](https://github.com/salesforce/TransmogrifAI/pull/286)
+- Skip serializing estimators + fix test + added empty data transform test [#281](https://github.com/salesforce/TransmogrifAI/pull/286)
+
+Dependency updates:
+N/A
+
+## 0.5.2
+
+Bug fixes:
+- Fixed local scoring with multipicklist features [#243](https://github.com/salesforce/TransmogrifAI/pull/243)
+- Fixed error messages in `DataCutter` and `DataBalancer` [#256](https://github.com/salesforce/TransmogrifAI/pull/256)
+- Fixed bug in in model selector fit method [#251](https://github.com/salesforce/TransmogrifAI/pull/251)
+- Fixed some Transmogrifier defaults to be modifiable / exposed [#232](https://github.com/salesforce/TransmogrifAI/pull/232)
+- Fixed bug in `OpXGBoostClassificationModel` [#229](https://github.com/salesforce/TransmogrifAI/pull/229)
+- Minor fixes / cleanup on notebooks, Helloworld examples, and developer guide [#226](https://github.com/salesforce/TransmogrifAI/pull/226), [#230](https://github.com/salesforce/TransmogrifAI/pull/230), [#240](https://github.com/salesforce/TransmogrifAI/pull/240), [#259](https://github.com/salesforce/TransmogrifAI/pull/259)
+
+New features / updates:
+- Added transformer classes for common math operations [#255](https://github.com/salesforce/TransmogrifAI/pull/255), [#257](https://github.com/salesforce/TransmogrifAI/pull/257)
+- Added string transformers for substring search and valid email [#265](https://github.com/salesforce/TransmogrifAI/pull/265)
+- Added scaler and descaler transformers [#223](https://github.com/salesforce/TransmogrifAI/pull/223)
+- Added Raw Feature Filter results e.g., metrics, exclusion reasons to serialization and to `ModelInsights` [#237](https://github.com/salesforce/TransmogrifAI/pull/237), [#252](https://github.com/salesforce/TransmogrifAI/pull/252), [#258](https://github.com/salesforce/TransmogrifAI/pull/258), [#276](https://github.com/salesforce/TransmogrifAI/pull/276)
+- Changed OpBinScoreEvaluator to allow for lift analysis [#233](https://github.com/salesforce/TransmogrifAI/pull/233)
+- Added random param builder for random hyperparameter search in model selectors [#238](https://github.com/salesforce/TransmogrifAI/pull/238)
+- Added possibility to return top K positives and top K negatives improvement for LOCO [#264](https://github.com/salesforce/TransmogrifAI/pull/264)
+- Added a max cardinality percentage that can be set for pivot [#241](https://github.com/salesforce/TransmogrifAI/pull/241)
+- Added minimum rows for scoring set in RawFeatureFilter [#250](https://github.com/salesforce/TransmogrifAI/pull/250)
+- Allowed copying model instances across multiple threads [#270](https://github.com/salesforce/TransmogrifAI/pull/270)
+- Added stub to allow loading models without workflow [#269](https://github.com/salesforce/TransmogrifAI/pull/269), [#272](https://github.com/salesforce/TransmogrifAI/pull/272)
+- Made decision tree numeric bucketizer tests less flaky [#225](https://github.com/salesforce/TransmogrifAI/pull/225)
+- Added Jupyter notebooks for samples [#231](https://github.com/salesforce/TransmogrifAI/pull/231)
+
+Dependency updates:
+- Switched to MLeap runtime from Aardpfark for local scoring [#249](https://github.com/salesforce/TransmogrifAI/pull/249), [#261](https://github.com/salesforce/TransmogrifAI/pull/261)
+
 ## 0.5.1
 
 Bug fixes:

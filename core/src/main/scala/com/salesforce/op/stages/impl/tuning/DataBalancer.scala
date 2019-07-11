@@ -33,9 +33,10 @@ package com.salesforce.op.stages.impl.tuning
 import com.salesforce.op.UID
 import com.salesforce.op.stages.impl.selector.ModelSelectorNames
 import org.apache.spark.ml.param._
-import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import org.apache.spark.sql.types.{Metadata, MetadataBuilder}
-import org.slf4j.LoggerFactory
+import org.apache.spark.sql.{DataFrame, Dataset, Row}
+
+import scala.util.Try
 
 case object DataBalancer {
 
@@ -70,9 +71,6 @@ case object DataBalancer {
  * @param uid
  */
 class DataBalancer(uid: String = UID[DataBalancer]) extends Splitter(uid = uid) with DataBalancerParams {
-
-  @transient private lazy val log = LoggerFactory.getLogger(this.getClass)
-  @transient private[op] var summary: Option[DataBalancerSummary] = None
 
   /**
    * Computes the upSample and downSample proportions.
@@ -116,26 +114,36 @@ class DataBalancer(uid: String = UID[DataBalancer]) extends Splitter(uid = uid) 
     }
   }
 
+
   /**
-   * Split into a training set and a test set and balance the training set
+   * Function to set parameters before passing into the validation step
+   * eg - do data balancing or dropping based on the labels
    *
-   * @param data to prepare for model training. first column must be the label as a double
-   * @return balanced training set and a test set
+   * @param data
+   * @return Parameters set in examining data
    */
-  def prepare(data: Dataset[Row]): ModelData = {
-    val negativeData = data.filter(_.getDouble(0) == 0.0).persist()
-    val positiveData = data.filter(_.getDouble(0) == 1.0).persist()
+  override def preValidationPrepare(data: Dataset[Row]): PrevalidationVal = {
+    val Seq(negativeData, positiveData) = splitNegativePositive(data)
     val negativeCount = negativeData.count()
     val positiveCount = positiveData.count()
     val seed = getSeed
 
-    if (!(isSet(isPositiveSmall) ||
-      isSet(downSampleFraction) ||
-      isSet(upSampleFraction) ||
-      isSet(alreadyBalancedFraction))
-    ) {
-      estimate(positiveCount = positiveCount, negativeCount = negativeCount, seed = seed)
-    }
+    estimate(positiveCount = positiveCount, negativeCount = negativeCount, seed = seed)
+
+    PrevalidationVal(summary, None)
+  }
+
+  /**
+   * Rebalance the training data within the validation step
+   *
+   * @param data to prepare for model training. first column must be the label as a double
+   * @return balanced training set and a test set
+   */
+  override def validationPrepare(data: Dataset[Row]): Dataset[Row] = {
+
+    val dataPrep = super.validationPrepare(data)
+    val Seq(negativeData, positiveData) = splitNegativePositive(dataPrep)
+    val seed = getSeed
 
     // If these conditions are met, that means that we have enough information to balance the data : upSample,
     // downSample and which class is in minority
@@ -159,14 +167,29 @@ class DataBalancer(uid: String = UID[DataBalancer]) extends Splitter(uid = uid) 
         sampleBalancedData(
           fraction = fraction,
           seed = seed,
-          data = data,
+          data = dataPrep,
           positiveData = positiveData,
           negativeData = negativeData
         )
       }
     }
 
-    ModelData(balanced.persist(), summary)
+    balanced.persist()
+  }
+
+  private def splitNegativePositive(data: DataFrame): Seq[DataFrame] = {
+    val labelColOpt = if (isSet(labelColumnName)) {
+      Option(data($(labelColumnName)))
+    } else {
+      // empty dataframes in tests don't have schema
+      Try(data(data.columns(0))).toOption
+    }
+
+    Seq(0.0, 1.0).flatMap { labelVal =>
+      labelColOpt
+        .map(labelCol => data.filter(labelCol === labelVal))
+        .orElse(Option(data)) // empty data frame
+    }
   }
 
   override def copy(extra: ParamMap): DataBalancer = {

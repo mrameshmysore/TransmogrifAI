@@ -234,10 +234,12 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
               "The RawFeatureFilter training reader will be used to generate the data for training")
         }
         checkReadersAndFeatures()
-        val FilteredRawData(cleanedData, featuresToDrop, mapKeysToDrop, featureDistributions) =
+
+        val FilteredRawData(cleanedData, featuresToDrop, mapKeysToDrop, rawFeatureFilterResults) =
           rf.generateFilteredRaw(rawFeatures, parameters)
-        setRawFeatureDistributions(featureDistributions.toArray)
-        setBlacklist(featuresToDrop, featureDistributions)
+
+        setRawFeatureFilterResults(rawFeatureFilterResults)
+        setBlacklist(featuresToDrop, rawFeatureFilterResults.rawFeatureDistributions)
         setBlacklistMapKeys(mapKeysToDrop)
         cleanedData
     }
@@ -349,7 +351,7 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
         .setParameters(getParameters())
         .setBlacklist(getBlacklist())
         .setBlacklistMapKeys(getBlacklistMapKeys())
-        .setRawFeatureDistributions(getRawFeatureDistributions())
+        .setRawFeatureFilterResults(getRawFeatureFilterResults())
 
     reader.map(model.setReader).getOrElse(model)
   }
@@ -466,7 +468,7 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
    * @param path to the trained workflow model
    * @return workflow model
    */
-  def loadModel(path: String): OpWorkflowModel = new OpWorkflowModelReader(this).load(path)
+  def loadModel(path: String): OpWorkflowModel = new OpWorkflowModelReader(Some(this)).load(path)
 
   /**
    * Returns a dataframe containing all the columns generated up to and including the feature input
@@ -515,6 +517,8 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
    *                           Output is the bins for the text features.
    * @param timePeriod         Time period used to apply circulate date transformation for date features, if not
    *                           specified will use numeric feature transformation
+   * @param minScoringRows     Minimum row threshold for scoring set comparisons to be used in checks. If the scoring
+   *                           set size is below this threshold, then only training data checks will be used
    * @tparam T Type of the data read in
    */
   @Experimental
@@ -532,7 +536,8 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
     protectedFeatures: Array[OPFeature] = Array.empty,
     protectedJSFeatures: Array[OPFeature] = Array.empty,
     textBinsFormula: (Summary, Int) => Int = RawFeatureFilter.textBinsFormula,
-    timePeriod: Option[TimePeriod] = None
+    timePeriod: Option[TimePeriod] = None,
+    minScoringRows: Int = RawFeatureFilter.minScoringRowsDefault
   ): this.type = {
     val training = trainingReader.orElse(reader).map(_.asInstanceOf[Reader[T]])
     require(training.nonEmpty, "Reader for training data must be provided either in withRawFeatureFilter or directly" +
@@ -553,7 +558,8 @@ class OpWorkflow(val uid: String = UID[OpWorkflow]) extends OpWorkflowCore {
         protectedFeatures = protectedRawFeatures,
         jsDivergenceProtectedFeatures = protectedRawJSFeatures,
         textBinsFormula = textBinsFormula,
-        timePeriod = timePeriod)
+        timePeriod = timePeriod,
+        minScoringRows = minScoringRows)
     }
     this
   }

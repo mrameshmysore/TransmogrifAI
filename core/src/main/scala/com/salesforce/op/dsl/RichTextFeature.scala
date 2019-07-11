@@ -63,11 +63,13 @@ trait RichTextFeature {
      * Text feature (ie the final vector has length k * number of Text inputs). Plus two additional columns
      * for "other" values and nulls - which will capture values that do not make the cut or values not seen in training
      *
-     * @param others     other features to include in the pivot
-     * @param topK       keep topK values
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  if true ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            other features to include in the pivot
+     * @param topK              keep topK values
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         if true ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return
      */
     def pivot
@@ -76,12 +78,14 @@ trait RichTextFeature {
       topK: Int = TransmogrifierDefaults.TopK,
       minSupport: Int = TransmogrifierDefaults.MinSupport,
       cleanText: Boolean = TransmogrifierDefaults.CleanText,
-      trackNulls: Boolean = TransmogrifierDefaults.TrackNulls
+      trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
       val vectorizer = new OpTextPivotVectorizer[T]()
 
       f.transformWith[OPVector](
-        stage = vectorizer.setTopK(topK).setMinSupport(minSupport).setCleanText(cleanText).setTrackNulls(trackNulls),
+        stage = vectorizer.setTopK(topK).setMinSupport(minSupport).setCleanText(cleanText)
+          .setTrackNulls(trackNulls).setMaxPctCardinality(maxPctCardinality),
         fs = others
       )
     }
@@ -92,10 +96,15 @@ trait RichTextFeature {
      *
      * @param that      other text feature
      * @param nGramSize the size of the n-gram to be used to compute the string distance
+     * @param toLowerCase lowercase before computing similarity
      * @return ngrammed feature
      */
-    def toNGramSimilarity(that: FeatureLike[T], nGramSize: Int = NGramSimilarity.nGramSize): FeatureLike[RealNN] =
-      f.transformWith(new TextNGramSimilarity[T](nGramSize), that)
+    def toNGramSimilarity(
+      that: FeatureLike[T],
+      nGramSize: Int = NGramSimilarity.nGramSize,
+      toLowerCase: Boolean = TextTokenizer.ToLowercase
+    ): FeatureLike[RealNN] =
+      f.transformWith(new TextNGramSimilarity[T](nGramSize).setToLowercase(toLowerCase), that)
 
     /**
      * Vectorize text features by first tokenizing each using [[TextTokenizer]] and then
@@ -425,6 +434,19 @@ trait RichTextFeature {
           .setDefaultLanguage(defaultLanguage)
       )
     }
+
+    /**
+     * Check if feature is a substring of the companion feature
+     * @param f2 feature which would contain the first input as a substring
+     * @param toLowercase lowercase before checking for substrings
+     * @tparam T2 type tag of second feature
+     * @return Binary feature indicating if substring was found
+     */
+    def isSubstring[T2 <: Text : TypeTag](
+      f2: FeatureLike[T2],
+      toLowercase: Boolean = TextTokenizer.ToLowercase
+    ): FeatureLike[Binary] =
+      f.transformWith(new SubstringTransformer[T, T2]().setToLowercase(toLowercase), f2)
   }
 
   implicit class RichPhoneFeature(val f: FeatureLike[Phone]) {
@@ -530,6 +552,7 @@ trait RichTextFeature {
      * @param trackNulls    produce column indicating if the number was null
      * @param fillValue     value to fill in for nulls in vactor creation
      * @param others        other phone numbers to vectorize
+     *
      * @return vector feature containing information about phone number
      */
     def vectorize(
@@ -562,15 +585,24 @@ trait RichTextFeature {
     def toEmailDomain: FeatureLike[Text] = f.map[Text](_.domain.toText, "domain")
 
     /**
+     * Check if email is valid
+     * @return binary feature containing boolean value of whether email was valid format
+     */
+    def isValidEmail: FeatureLike[Binary] = f.transformWith(new ValidEmailTransformer())
+
+
+    /**
      * Converts a sequence of [[Email]] features into a vector, extracting the domains of the e-mails
      * and keeping the top K occurrences of each feature, along with an extra column per feature
      * indicating how many values were not in the top K.
      *
-     * @param others     Other [[Email]] features
-     * @param topK       How many values to keep in the vector
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  If true, ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            Other [[Email]] features
+     * @param topK              How many values to keep in the vector
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         If true, ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return The vectorized features
      */
     def vectorize
@@ -579,11 +611,12 @@ trait RichTextFeature {
       cleanText: Boolean,
       minSupport: Int,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
-      others: Array[FeatureLike[Email]] = Array.empty
+      others: Array[FeatureLike[Email]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
       val domains = (f +: others).map(_.map[PickList](_.domain.toPickList))
       domains.head.pivot(others = domains.tail, topK = topK, minSupport = minSupport, cleanText = cleanText,
-        trackNulls = trackNulls
+        trackNulls = trackNulls, maxPctCardinality = maxPctCardinality
       )
     }
 
@@ -621,11 +654,13 @@ trait RichTextFeature {
      * and keeping the top K occurrences of each feature, along with an extra column per feature
      * indicating how many values were not in the top K.
      *
-     * @param others     Other [[URL]] features
-     * @param topK       How many values to keep in the vector
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  If true, ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            Other [[URL]] features
+     * @param topK              How many values to keep in the vector
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         If true, ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return The vectorized features
      */
     def vectorize
@@ -634,11 +669,12 @@ trait RichTextFeature {
       cleanText: Boolean,
       minSupport: Int,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
-      others: Array[FeatureLike[URL]] = Array.empty
+      others: Array[FeatureLike[URL]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
       val domains = (f +: others).map(_.map[PickList](v => if (v.isValid) v.domain.toPickList else PickList.empty))
       domains.head.pivot(others = domains.tail, topK = topK, minSupport = minSupport, cleanText = cleanText,
-        trackNulls = trackNulls
+        trackNulls = trackNulls, maxPctCardinality = maxPctCardinality
       )
     }
 
@@ -662,12 +698,14 @@ trait RichTextFeature {
      * Extracts Base64 features (MIME type etc.),
      * then converts those into PickList features and vectorizes them.
      *
-     * @param topK       number of values to keep for each key
-     * @param minSupport min times a value must occur to be retained in pivot
-     * @param cleanText  clean text before pivoting
-     * @param trackNulls keep an extra column that indicated if feature was null
-     * @param typeHint   MIME type hint, i.e. 'application/json', 'text/plain' etc.
-     * @param others     other features of the same type
+     * @param topK              number of values to keep for each key
+     * @param minSupport        min times a value must occur to be retained in pivot
+     * @param cleanText         clean text before pivoting
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param typeHint          MIME type hint, i.e. 'application/json', 'text/plain' etc.
+     * @param others            other features of the same type
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return result feature of type vector
      */
     def vectorize(
@@ -676,14 +714,16 @@ trait RichTextFeature {
       cleanText: Boolean,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
       typeHint: Option[String] = None,
-      others: Array[FeatureLike[Base64]] = Array.empty
+      others: Array[FeatureLike[Base64]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
 
       val feats: Array[FeatureLike[PickList]] =
         (f +: others).map(_.detectMimeTypes(typeHint).map[PickList](_.value.toPickList))
 
       feats.head.vectorize(
-        topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls, others = feats.tail
+        topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls, others = feats.tail,
+        maxPctCardinality = maxPctCardinality
       )
     }
 
@@ -695,11 +735,13 @@ trait RichTextFeature {
      * Converts a sequence of [[PickList]] features into a vector keeping the top K occurrences of each feature,
      * along with an extra column per feature indicating how many values were not in the top K.
      *
-     * @param others     Other [[PickList]] features to include in pivot
-     * @param topK       How many values to keep in the vector
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  If true, ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            Other [[PickList]] features to include in pivot
+     * @param topK              How many values to keep in the vector
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         If true, ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return The vectorized features
      */
     def vectorize
@@ -708,9 +750,11 @@ trait RichTextFeature {
       minSupport: Int,
       cleanText: Boolean,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
-      others: Array[FeatureLike[PickList]] = Array.empty
+      others: Array[FeatureLike[PickList]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
-      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls)
+      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls,
+        maxPctCardinality = maxPctCardinality)
     }
 
   }
@@ -721,11 +765,13 @@ trait RichTextFeature {
      * Converts a sequence of [[ComboBox]] features into a vector keeping the top K occurrences of each feature,
      * along with an extra column per feature indicating how many values were not in the top K.
      *
-     * @param others     Other [[ComboBox]] features to include in pivot
-     * @param topK       How many values to keep in the vector
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  If true, ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            Other [[ComboBox]] features to include in pivot
+     * @param topK              How many values to keep in the vector
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         If true, ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return The vectorized features
      */
     def vectorize
@@ -734,9 +780,11 @@ trait RichTextFeature {
       minSupport: Int,
       cleanText: Boolean,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
-      others: Array[FeatureLike[ComboBox]] = Array.empty
+      others: Array[FeatureLike[ComboBox]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
-      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls)
+      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls,
+        maxPctCardinality = maxPctCardinality)
     }
 
   }
@@ -747,11 +795,13 @@ trait RichTextFeature {
      * Converts a sequence of [[ID]] features into a vector keeping the top K occurrences of each feature,
      * along with an extra column per feature indicating how many values were not in the top K.
      *
-     * @param others     Other [[ID]] features to include in pivot
-     * @param topK       How many values to keep in the vector
-     * @param minSupport Min times a value must occur to be retained in pivot
-     * @param cleanText  If true, ignores capitalization and punctuations when grouping categories
-     * @param trackNulls keep an extra column that indicated if feature was null
+     * @param others            Other [[ID]] features to include in pivot
+     * @param topK              How many values to keep in the vector
+     * @param minSupport        Min times a value must occur to be retained in pivot
+     * @param cleanText         If true, ignores capitalization and punctuations when grouping categories
+     * @param trackNulls        keep an extra column that indicated if feature was null
+     * @param maxPctCardinality max percentage of distinct values a categorical feature can have (between 0.0 and 1.00)
+     *
      * @return The vectorized features
      */
     def vectorize
@@ -760,9 +810,11 @@ trait RichTextFeature {
       minSupport: Int,
       cleanText: Boolean,
       trackNulls: Boolean = TransmogrifierDefaults.TrackNulls,
-      others: Array[FeatureLike[ID]] = Array.empty
+      others: Array[FeatureLike[ID]] = Array.empty,
+      maxPctCardinality: Double = OpOneHotVectorizer.MaxPctCardinality
     ): FeatureLike[OPVector] = {
-      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls)
+      f.pivot(others = others, topK = topK, minSupport = minSupport, cleanText = cleanText, trackNulls = trackNulls,
+        maxPctCardinality = maxPctCardinality)
     }
 
   }

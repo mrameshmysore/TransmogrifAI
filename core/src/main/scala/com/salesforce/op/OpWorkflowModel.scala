@@ -32,13 +32,14 @@ package com.salesforce.op
 
 import com.salesforce.op.evaluators.{EvaluationMetrics, OpEvaluatorBase}
 import com.salesforce.op.features.types.FeatureType
-import com.salesforce.op.features.{FeatureLike, OPFeature}
+import com.salesforce.op.features.{Feature, FeatureLike, OPFeature}
 import com.salesforce.op.readers.DataFrameFieldNames._
 import com.salesforce.op.stages.{OPStage, OpPipelineStage, OpTransformer}
 import com.salesforce.op.utils.spark.RichDataset._
 import com.salesforce.op.utils.spark.RichMetadata._
 import com.salesforce.op.utils.stages.FitStagesUtil
 import org.apache.spark.sql.types.{LongType, Metadata, StructField, StructType}
+import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.json4s.JValue
@@ -252,7 +253,7 @@ class OpWorkflowModel(val uid: String = UID[OpWorkflowModel], val trainingParams
         val parentStageIds = feature.traverse[Set[String]](Set.empty[String])((s, f) => s + f.originStage.uid)
         val modelStages = stages.filter(s => parentStageIds.contains(s.uid))
         ModelInsights.extractFromStages(modelStages, rawFeatures, trainingParams,
-          blacklistedFeatures, blacklistedMapKeys, rawFeatureDistributions)
+          blacklistedFeatures, blacklistedMapKeys, rawFeatureFilterResults)
     }
   }
 
@@ -501,6 +502,30 @@ class OpWorkflowModel(val uid: String = UID[OpWorkflowModel], val trainingParams
     scores -> metrics
   }
 
+  /**
+   * Creates a copy of this [[OpWorkflowModel]] instance
+   *
+   * @return copy of this [[OpWorkflowModel]] instance
+   */
+  def copy(): OpWorkflowModel = {
+    def copyFeatures(features: Array[OPFeature]): Array[OPFeature] = features.collect { case f: Feature[_] =>
+      implicit val tt = f.wtt
+      f.copy()
+    }
+    val copy =
+      new OpWorkflowModel(uid = uid, trainingParams = trainingParams.copy())
+        .setFeatures(copyFeatures(resultFeatures))
+        .setBlacklist(copyFeatures(blacklistedFeatures))
+        .setBlacklistMapKeys(blacklistedMapKeys)
+        .setRawFeatureFilterResults(rawFeatureFilterResults.copy())
+        .setStages(stages.map(_.copy(ParamMap.empty)))
+        .setParameters(parameters.copy())
+
+    reader.foreach(copy.setReader)
+
+    if (isWorkflowCV) copy.withWorkflowCV else copy
+  }
+
 }
 
 case object OpWorkflowModel {
@@ -509,5 +534,13 @@ case object OpWorkflowModel {
   val KeepIntermediateFeatures = false
   val PersistEveryKStages = 5
   val PersistScores = true
+
+  /**
+   * Load a previously trained workflow model from path
+   *
+   * @param path to the trained workflow model
+   * @return workflow model
+   */
+  def load(path: String): OpWorkflowModel = new OpWorkflowModelReader(None).load(path)
 
 }

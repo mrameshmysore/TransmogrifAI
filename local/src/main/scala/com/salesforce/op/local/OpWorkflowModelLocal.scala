@@ -30,18 +30,21 @@
 
 package com.salesforce.op.local
 
-import com.ibm.aardpfark.spark.ml.SparkSupport
-import com.opendatagroup.hadrian.jvmcompiler.PFAEngine
+
+import java.nio.file.Paths
+
+import com.github.marschall.memoryfilesystem.MemoryFileSystemBuilder
 import com.salesforce.op.OpWorkflowModel
+import com.salesforce.op.features.FeatureSparkTypes
 import com.salesforce.op.stages.sparkwrappers.generic.SparkWrapperParams
 import com.salesforce.op.stages.{OPStage, OpTransformer}
-import org.apache.spark.ml.SparkMLSharedParamConstants._
+import ml.combust.bundle.serializer.SerializationFormat
+import ml.combust.bundle.{BundleContext, BundleRegistry}
+import ml.combust.mleap.runtime.MleapContext
 import org.apache.spark.ml.Transformer
-import org.apache.spark.ml.linalg.Vector
-import org.apache.spark.ml.param.ParamMap
-import org.json4s._
-import org.json4s.native.JsonMethods._
-import org.json4s.native.Serialization
+import org.apache.spark.ml.bundle.SparkBundleContext
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 import scala.collection.mutable
 
@@ -57,49 +60,57 @@ trait OpWorkflowModelLocal extends Serializable {
    */
   implicit class RichOpWorkflowModel(model: OpWorkflowModel) {
 
-    private implicit val formats = DefaultFormats
-
-    /**
-     * Internal PFA model representation
-     *
-     * @param inputs mode inputs mappings
-     * @param output output mapping
-     * @param engine PFA engine
-     */
-    private case class PFAModel
-    (
-      inputs: Map[String, String],
-      output: (String, String),
-      engine: PFAEngine[AnyRef, AnyRef]
-    )
-
     /**
      * Internal OP model representation
      *
      * @param output output name
-     * @param model model instance
+     * @param model  model instance
      */
     private case class OPModel(output: String, model: OPStage with OpTransformer)
 
     /**
+     * Internal MLeap model representation
+     *
+     * @param inputs  model inputs
+     * @param output  model output
+     * @param modelFn model function
+     */
+    private case class MLeapModel
+    (
+      inputs: Array[String],
+      output: String,
+      modelFn: Array[Any] => Any
+    )
+
+    /**
      * Prepares a score function for local scoring
      *
+     * @param spark Spark Session needed for preparing scoring function,
+     *              Once scoring function is returned the Spark Session can be shutdown
+     *              since it's not required during local scoring.
      * @return score function for local scoring
      */
-    def scoreFunction: ScoreFunction = {
+    def scoreFunction(implicit spark: SparkSession): ScoreFunction = {
       // Prepare the stages for scoring
       val stagesWithIndex = model.stages.zipWithIndex
+
+      // Prepare an empty DataFrame with transformed schema & metadata (needed for loading MLeap models)
+      val transformedData = makeTransformedDataFrame(model)
+
       // Collect all OP stages
       val opStages = stagesWithIndex.collect { case (s: OpTransformer, i) => OPModel(s.getOutputFeatureName, s) -> i }
+
       // Collect all Spark wrapped stages
       val sparkStages = stagesWithIndex.filterNot(_._1.isInstanceOf[OpTransformer]).collect {
-        case (s: OPStage with SparkWrapperParams[_], i) if s.getSparkMlStage().isDefined =>
-          (s, s.getSparkMlStage().get.asInstanceOf[Transformer].copy(ParamMap.empty), i)
+        case (opStage: OPStage with SparkWrapperParams[_], i) if opStage.getSparkMlStage().isDefined =>
+          val sparkStage = opStage.getSparkMlStage().get.asInstanceOf[Transformer]
+          (opStage, sparkStage, i)
       }
-      // Convert Spark wrapped stages into PFA models
-      val pfaStages = sparkStages.map { case (opStage, sparkStage, i) => toPFAModel(opStage, sparkStage) -> i }
+      // Convert Spark wrapped stages into MLeap models
+      val mleapStages = toMLeapModels(sparkStages, transformedData)
+
       // Combine all stages and apply the original order
-      val allStages = (opStages ++ pfaStages).sortBy(_._2).map(_._1)
+      val allStages = (opStages ++ mleapStages).sortBy(_._2).map(_._1)
       val resultFeatures = model.getResultFeatures().map(_.name).toSet
 
       // Score Function
@@ -110,56 +121,82 @@ trait OpWorkflowModelLocal extends Serializable {
           case (row, OPModel(output, stage)) =>
             row += output -> stage.transformKeyValue(row.apply)
 
-          // For PFA Models we execute PFA engine action with json in/out
-          case (row, PFAModel(inputs, (out, outCol), engine)) =>
-            val inJson = rowToJson(row, inputs)
-            val engineIn = engine.jsonInput(inJson)
-            val engineOut = engine.action(engineIn)
-            val resMap =
-              parse(engineOut.toString, useBigDecimalForDouble = false, useBigIntForLong = true)
-                .extract[Map[String, Any]]
-            row += out -> resMap(outCol)
+          // For MLeap models we call the prepared local model
+          case (row, MLeapModel(inputs, output, modelFn)) =>
+            val in = inputs.map(inputName => row.get(inputName) match {
+              case None | Some(null) => null
+              case Some(v) => v
+            })
+            row += output -> modelFn(in)
         }
+
+        // Only return the result features of the model
         transformedRow.filterKeys(resultFeatures.contains).toMap
       }
     }
 
     /**
-     * Convert Spark wrapped staged into PFA Models
+     * Prepares an empty DataFrame with transformed schema & metadata (needed for loading MLeap models)
      */
-    private def toPFAModel(opStage: OPStage with SparkWrapperParams[_], sparkStage: Transformer): PFAModel = {
-      // Update input/output params for Spark stages to default ones
-      val inParam = sparkStage.getParam(inputCol.name)
-      val outParam = sparkStage.getParam(outputCol.name)
-      val inputs = opStage.getInputFeatures().map(_.name).map {
-        case n if sparkStage.get(inParam).contains(n) => n -> inputCol.name
-        case n if sparkStage.get(outParam).contains(n) => n -> outputCol.name
-        case n => n -> n
-      }.toMap
-      val output = opStage.getOutputFeatureName
-      sparkStage.set(inParam, inputCol.name).set(outParam, outputCol.name)
-      val pfaJson = SparkSupport.toPFA(sparkStage, pretty = true)
-      val pfaEngine = PFAEngine.fromJson(pfaJson).head
-      PFAModel(inputs, (output, outputCol.name), pfaEngine)
+    private def makeTransformedDataFrame(model: OpWorkflowModel)(implicit spark: SparkSession): DataFrame = {
+      val rawSchema = FeatureSparkTypes.toStructType(model.rawFeatures: _*)
+      val df = spark.emptyDataset[Row](RowEncoder(rawSchema))
+      model.stages.collect { case t: Transformer => t }.foldLeft(df) { case (d, t) => t.transform(d) }
     }
 
     /**
-     * Convert row of Spark values into a json convertible Map
-     * See [[FeatureTypeSparkConverter.toSpark]] for all possible values - we invert them here
+     * Convert Spark wrapped stages into MLeap local Models
+     *
+     * @param sparkStages     stages to convert
+     * @param transformedData dataset with transformed schema & metadata (needed for loading MLeap models)
+     * @return MLeap local stages
      */
-    private def rowToJson(row: mutable.Map[String, Any], inputs: Map[String, String]): String = {
-      val in = inputs.map { case (k, v) => (v, row.get(k)) }.mapValues {
-        case Some(v: Vector) => v.toArray
-        case Some(v: mutable.WrappedArray[_]) => v.toArray(v.elemTag)
-        case Some(v: Map[_, _]) => v.mapValues {
-          case v: mutable.WrappedArray[_] => v.toArray(v.elemTag)
-          case x => x
+    private def toMLeapModels
+    (
+      sparkStages: Seq[(OPStage, Transformer, Int)],
+      transformedData: DataFrame
+    ): Seq[(MLeapModel, Int)] = {
+      // Setup a in-memory file system for MLeap model saving/loading
+      val emptyPath = Paths.get("")
+      val fs = MemoryFileSystemBuilder.newEmpty().build()
+
+      // Setup two MLeap registries - one local and one for Spark
+      val mleapRegistry = BundleRegistry("ml.combust.mleap.registry.default")
+      val sparkRegistry = BundleRegistry("ml.combust.mleap.spark.registry.default")
+
+      val sparkBundleContext = BundleContext[SparkBundleContext](
+        SparkBundleContext(Option(transformedData), sparkRegistry),
+        SerializationFormat.Json, sparkRegistry, fs, emptyPath
+      )
+      val mleapBundleContext = BundleContext[MleapContext](
+        MleapContext(mleapRegistry), SerializationFormat.Json, mleapRegistry, fs, emptyPath)
+
+      for {
+        (opStage, sparkStage, i) <- sparkStages
+      } yield try {
+        val model = {
+          // Serialize Spark model using Spark registry
+          val opModel = sparkRegistry.opForObj[SparkBundleContext, AnyRef, AnyRef](sparkStage)
+          val emptyModel = new ml.combust.bundle.dsl.Model(op = opModel.Model.opName)
+          val serializedModel = opModel.Model.store(emptyModel, sparkStage)(sparkBundleContext)
+
+          // Load MLeap model using MLeap local registry from the serialized model
+          val mleapLocalModel = mleapRegistry.model[MleapContext, AnyRef](op = serializedModel.op)
+          mleapLocalModel.load(serializedModel)(mleapBundleContext)
         }
-        case None | Some(null) => null
-        case Some(v) => v
+        // Prepare and return MLeap model with inputs, output and model function
+        MLeapModel(
+          inputs = opStage.getTransientFeatures().map(_.name),
+          output = opStage.getOutputFeatureName,
+          modelFn = MLeapModelConverter.modelToFunction(model)
+        ) -> i
+      } catch {
+        case e: Exception =>
+          throw new RuntimeException(s"Failed to convert stage '${opStage.uid}' to MLeap stage", e)
       }
-      Serialization.write(in)
     }
+
+
   }
 
 }
