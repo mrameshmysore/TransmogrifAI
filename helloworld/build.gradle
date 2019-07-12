@@ -15,13 +15,14 @@ plugins {
 repositories {
     jcenter()
     mavenCentral()
+    mavenLocal()
 }
 
 apply plugin: 'application'
 apply plugin: 'java'
 apply plugin: 'scala'
 apply plugin: 'com.github.johnrengelman.shadow'
-apply plugin: 'scalaStyle'
+// apply plugin: 'scalaStyle'
 apply plugin: 'com.commercehub.gradle.plugin.avro'
 
 apply from: 'gradle/tests.gradle'
@@ -31,7 +32,7 @@ sourceCompatibility = JavaVersion.VERSION_1_8
 targetCompatibility = JavaVersion.VERSION_1_8
 
 // The main class for the application plugin and is currently unused. Setting a dummy one.
-mainClassName = "please.set.main.class.in.build.gradle"
+mainClassName = "com.salesforce.hw.OpIrisSimple"
 
 ext {
     scalaVersion = '2.11'
@@ -39,7 +40,7 @@ ext {
     junitVersion = '4.11'
     sparkVersion = '2.3.2'
     scalatestVersion = '3.0.0'
-    transmogrifaiVersion ='0.5.3'
+    transmogrifaiVersion ='0.6.0'
     collectionsVersion = '3.2.2'
     scoveragePluginVersion = '1.3.1'
 }
@@ -70,6 +71,7 @@ dependencies {
 
     // TransmogrifAI
     compile "com.salesforce.transmogrifai:transmogrifai-core_$scalaVersion:$transmogrifaiVersion"
+    compile "com.salesforce.transmogrifai:transmogrifai-local_$scalaVersion:$transmogrifaiVersion"
 
     // Pretrained models used in TransmogrifAI, e.g. OpenNLP POS/NER models etc. (optional)
     // compile "com.salesforce.transmogrifai:transmogrifai-models_$scalaVersion:$transmogrifaiVersion"
@@ -117,13 +119,8 @@ shadowJar {
     baseName = jar.baseName
 }
 
-scalaStyle {
-    configLocation = "${rootProject.projectDir}/gradle/scalastyle-config.xml"
-    includeTestSourceDirectory = true
-    source = "src/main/scala"
-    testSource = "src/test/scala"
-}
-compileScala.dependsOn(scalaStyle)
+
+
 
 avro {
     createSetters = true

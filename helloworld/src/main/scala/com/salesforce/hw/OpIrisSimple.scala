@@ -39,15 +39,17 @@ import com.salesforce.op.stages.impl.classification.MultiClassificationModelSele
 import com.salesforce.op.stages.impl.classification.MultiClassClassificationModelsToTry._
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
+import com.salesforce.op.local._
 
 /**
  * Define a case class corresponding to our data
- * @param id           flower id
- * @param sepalLength  sepal length in cm
- * @param sepalWidth   sepal width in cm
- * @param petalLength  petal length in cm
- * @param petalWidth   petal width in cm
- * @param irisClass    class of iris (Iris Setosa, Iris Veriscolour, Iris Virginica)
+ *
+ * @param id          flower id
+ * @param sepalLength sepal length in cm
+ * @param sepalWidth  sepal width in cm
+ * @param petalLength petal length in cm
+ * @param petalWidth  petal width in cm
+ * @param irisClass   class of iris (Iris Setosa, Iris Veriscolour, Iris Virginica)
  */
 case class Iris
 (
@@ -66,7 +68,7 @@ object OpIrisSimple {
 
   /**
    * Run this from the command line with
-   * ./gradlew sparkSubmit -Dmain=com.salesforce.hw.OpIrisSimple -Dargs=/full/path/to/csv/file
+   * ./gradlew -q sparkSubmit -Dmain=com.salesforce.hw.OpIrisSimple -Dargs="`pwd`/src/main/resources/IrisDataset/iris.csv"
    */
   def main(args: Array[String]): Unit = {
     if (args.isEmpty) {
@@ -127,15 +129,15 @@ object OpIrisSimple {
 
     // Extract information (i.e. feature importance) via model insights
     val modelInsights = model.modelInsights(prediction)
-    val modelFeatures = modelInsights.features.flatMap( feature => feature.derivedFeatures)
-    val featureContributions = modelFeatures.map( feature => (feature.derivedFeatureName,
-      feature.contribution.map( contribution => math.abs(contribution))
-        .foldLeft(0.0) { (max, contribution) => math.max(max, contribution)}))
-    val sortedContributions = featureContributions.sortBy( contribution => -contribution._2)
+    val modelFeatures = modelInsights.features.flatMap(feature => feature.derivedFeatures)
+    val featureContributions = modelFeatures.map(feature => (feature.derivedFeatureName,
+      feature.contribution.map(contribution => math.abs(contribution))
+        .foldLeft(0.0) { (max, contribution) => math.max(max, contribution) }))
+    val sortedContributions = featureContributions.sortBy(contribution => -contribution._2)
 
     val topNum = math.min(20, sortedContributions.size)
     println(s"Top $topNum feature contributions:")
-    sortedContributions.take(topNum).foreach( featureInfo => println(s"${featureInfo._1}: ${featureInfo._2}"))
+    sortedContributions.take(topNum).foreach(featureInfo => println(s"${featureInfo._1}: ${featureInfo._2}"))
 
 
     // Manifest the result features of the workflow
@@ -144,7 +146,42 @@ object OpIrisSimple {
 
     println("Metrics:\n" + metrics)
 
+    model.save(path = "/tmp/workflow-iris", overwrite = true)
+
     // Stop Spark gracefully
+    spark.stop()
+  }
+}
+
+import com.salesforce.op.OpWorkflowModel
+
+
+object OpIrisLoadSimple {
+  /**
+   * IMPORTANT NOTE !!!!
+   * THe above object (OpIrisSimple) must be present because it contains definitions of lambda functions
+   * e.g. ` val sepalLength = FeatureBuilder.Real[Iris].extract(  _.sepalLength.toReal  ).asPredictor`
+   * that are used back when we reconstruct the workflow
+   *
+   * run it as:
+   * ./gradlew -q sparkSubmit -Dmain=com.salesforce.hw.OpIrisLoadSimple -Dargs="/tmp/workflow-iris"
+   *
+   *
+   */
+  def main(args: Array[String]): Unit = {
+    if (args.isEmpty) {
+      println("Workflow dir not provided...")
+      sys.exit(1)
+    }
+
+    implicit val spark = SparkSession.builder.config(new SparkConf()).getOrCreate()
+
+    val workflow = OpWorkflowModel.load(args(0))
+    val rawData = Map("sepalLength" -> 6.9, "sepalWidth" -> 3.1, "petalLength" -> 5.1,
+      "petalWidth" -> 2.3, "irisClass" -> null
+    )
+    val res = workflow.scoreFunction(spark)(rawData)
+    println(res)
     spark.stop()
   }
 }
